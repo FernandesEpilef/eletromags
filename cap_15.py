@@ -12,318 +12,238 @@ import matplotlib.pyplot as plt
 # Considere Q/(4*pi*epsilon) = 1
 # Domínio: -5 <= x,y <= 5
 # Step: 0.1 or 0.01
-# =============================================
 
-# passo_1: definição das cargas
-
-# 1) Definição das cargas (Exercício 15.1)
-# -----------------------------
-charges = np.array([-1.0, +1.0, -1.0])  # valores de Qk, com Q/(4πϵ)=1 embutido
-pos = np.array([[-1.0, 0.0],
-                [ 0.0, 1.0],
-                [ 1.0, 0.0]])           # posições (xk, yk)
-
-# Janela pedida no PDF
-XMIN, XMAX = -5.0, 5.0
-YMIN, YMAX = -5.0, 5.0
-
-# Passos Δℓ (o PDF sugere 0.1 ou 0.01)
-DL_E = 0.10  # para linhas de campo (eqs. 15.5 e 15.6)
-DL_V = 0.10  # para equipotenciais (eqs. 15.7 e 15.8)
-
-# Quantidade de curvas e controles de laço
-NLE = 16        # número de linhas de campo por carga (pontos iniciais no círculo)
-NLV = 6         # número de equipotenciais por carga (pontos iniciais variando "raio")
-MAX_STEPS = 5000
-PLOT_EVERY = 2  # plota 1 ponto a cada PLOT_EVERY iterações (reduz densidade)
-
-# Tolerâncias (para não explodir na singularidade e parar perto de cargas)
-E_SING = 5e-5         # se |E| ficar muito pequeno, para
-NEAR_CHARGE_E = 5e-2  # linhas de campo: para se chegar muito perto de uma carga
-NEAR_CHARGE_V = 5e-3  # equipotenciais: ainda mais perto -> para
+# ============================================================
+#  PLOTAGEM DE CAMPO (Seção 15.2)
+#  - Linhas de campo elétrico e linhas equipotenciais
+#  - Cargas pontuais coplanares (2D)
+#
+#  Convenção do enunciado:
+#  Considere Q/(4*pi*epsilon) = 1  (constante já "embutida")
+#  e o domínio -5 <= x,y <= 5
+# ============================================================
 
 
-# -----------------------------
-# 2) Funções do problema (eqs. 15.3 e 15.4)
-# -----------------------------
-def electric_field(x, y):
+# -------------------------------
+# Equações do livro (15.3) e (15.4)
+# -------------------------------
+def electric_field(x, y, Q, pos):
     """
-    Campo elétrico E = (Ex,Ey) em (x,y).
-
-    (PDF) eq. (15.3):
-      Ex(x,y) = Σk [ Qk * (x - xk) / rk^3 ]
-      Ey(x,y) = Σk [ Qk * (y - yk) / rk^3 ]
-    onde rk = sqrt((x-xk)^2 + (y-yk)^2)
-    e Q/(4πϵ)=1 já está embutido em Qk.
+    Campo elétrico E = (Ex, Ey) devido a cargas pontuais coplanares.
+    Implementa a forma 2D da eq. (15.3) do PDF:
+        Ex = sum_k Qk * (x - xk) / R^3
+        Ey = sum_k Qk * (y - yk) / R^3
+    onde R = sqrt((x-xk)^2 + (y-yk)^2)
     """
-    Ex = 0.0
-    Ey = 0.0
-
-    for k in range(len(charges)):
-        dx = x - pos[k, 0]
-        dy = y - pos[k, 1]
-        r2 = dx*dx + dy*dy
-        r = np.sqrt(r2)
-
-        # evita divisão por zero (singularidade na carga)
-        if r == 0:
-            continue
-
-        r3 = r**3
-        Ex += charges[k] * dx / r3
-        Ey += charges[k] * dy / r3
-
+    Ex, Ey = 0.0, 0.0
+    for qk, (xk, yk) in zip(Q, pos):
+        dx = x - xk
+        dy = y - yk
+        R = np.sqrt(dx*dx + dy*dy)
+        # Para evitar divisão por zero, o chamador também checa distância mínima
+        Ex += qk * dx / (R**3)
+        Ey += qk * dy / (R**3)
     return Ex, Ey
 
 
-def potential_V(x, y):
+def potential(x, y, Q, pos):
     """
-    Potencial elétrico V(x,y).
-
-    (PDF) eq. (15.4):
-      V(x,y) = Σk [ Qk / rk ]
-    onde rk = sqrt((x-xk)^2 + (y-yk)^2)
-    e Q/(4πϵ)=1 já está embutido.
+    Potencial elétrico V devido a cargas pontuais coplanares.
+    Implementa a forma 2D da eq. (15.4) do PDF:
+        V = sum_k Qk / R
     """
     V = 0.0
-
-    for k in range(len(charges)):
-        dx = x - pos[k, 0]
-        dy = y - pos[k, 1]
-        r = np.sqrt(dx*dx + dy*dy)
-
-        if r == 0:
-            continue
-
-        V += charges[k] / r
-
+    for qk, (xk, yk) in zip(Q, pos):
+        dx = x - xk
+        dy = y - yk
+        R = np.sqrt(dx*dx + dy*dy)
+        V += qk / R
     return V
 
 
-# -----------------------------
-# 3) Funções auxiliares simples
-# -----------------------------
-def inside_box(x, y):
-    """Verifica se (x,y) está dentro da janela pedida no PDF."""
-    return (XMIN <= x <= XMAX) and (YMIN <= y <= YMAX)
+# -------------------------------
+# Traçado numérico de uma linha de campo
+# (passos 1-4 do livro para linhas de campo)
+# usando eqs. (15.5) e (15.6):
+#    dx = Δℓ * Ex/E
+#    dy = Δℓ * Ey/E
+# -------------------------------
+def trace_field_line(
+    start_xy, Q, pos,
+    dL=0.05,                 # Δℓ (passo ao longo da linha de campo) ## IMPORTANTE E MEXE MUITO COM O RESULTADO
+    bounds=5.0,              # janela: -bounds <= x,y <= bounds
+    min_dist_charge=0.05,    # para evitar singularidade perto da carga
+    Emin=5e-5,               # "E ~ 0" (ponto singular, como no exemplo)
+    max_steps=5000,
+    direction=+1             # +1 segue E; -1 segue -E (útil para completar a linha)
+):
+    x, y = start_xy
+    pts = [(x, y)]
 
-
-def near_any_charge(x, y, tol):
-    """Para evitar singularidade: para se estiver muito perto de alguma carga."""
-    for k in range(len(charges)):
-        if abs(x - pos[k, 0]) < tol and abs(y - pos[k, 1]) < tol:
-            return True
-    return False
-
-
-# -----------------------------
-# 4) Traçar linhas de campo (eqs. 15.5 e 15.6)
-# -----------------------------
-def trace_field_line(x0, y0, q_source):
-    """
-    Traça uma linha de campo a partir do ponto inicial (x0,y0).
-
-    (PDF) eqs. (15.5) e (15.6):
-      Δx = Δℓ * Ex/|E|
-      Δy = Δℓ * Ey/|E|
-    com |E| = sqrt(Ex^2 + Ey^2)
-
-    Observação comum (como no exemplo do livro): se a carga “fonte” for negativa,
-    inverte-se o passo para desenhar linhas "saindo" dela (para visualização).
-    """
-    xs = [x0]
-    ys = [y0]
-
-    x = x0
-    y = y0
-
-    for step in range(MAX_STEPS):
-        Ex, Ey = electric_field(x, y)
-        E = np.sqrt(Ex*Ex + Ey*Ey)
-
-        # (a) singularidade (quando |E| muito pequeno)
-        if E <= E_SING:
+    for _ in range(max_steps):
+        # Checa se saiu do domínio
+        if abs(x) > bounds or abs(y) > bounds:
             break
 
-        # (PDF) eqs. (15.5)-(15.6): deslocamento normalizado por |E|
-        dx = DL_E * (Ex / E)
-        dy = DL_E * (Ey / E)
+        # Checa proximidade de qualquer carga (evitar singularidade)
+        for (xk, yk) in pos:
+            if np.hypot(x - xk, y - yk) < min_dist_charge:
+                return np.array(pts)
 
-        # ajuste do exemplo: para carga negativa, inverte para "sair" dela
-        if q_source < 0:
-            dx = -dx
-            dy = -dy
+        Ex, Ey = electric_field(x, y, Q, pos)
+        E = np.hypot(Ex, Ey)
 
-        x_new = x + dx
-        y_new = y + dy
-
-        # (c) se saiu da janela, para
-        if not inside_box(x_new, y_new):
+        # Checa ponto singular (E muito pequeno)
+        if E < Emin:
             break
 
-        # (b) se chegou perto de uma carga, para (evitar r ~ 0)
-        if near_any_charge(x_new, y_new, NEAR_CHARGE_E):
+        # Eqs. (15.5) e (15.6) do PDF
+        dx = direction * dL * (Ex / E)
+        dy = direction * dL * (Ey / E)
+
+        x += dx
+        y += dy
+        pts.append((x, y))
+
+    return np.array(pts)
+
+
+# -------------------------------
+# Traçado numérico de uma linha equipotencial
+# (passos 1-4 do livro para equipotenciais)
+# usando eqs. (15.7) e (15.8), isto é, passo perpendicular a E:
+#    dx = -Δℓ * Ey/E
+#    dy =  Δℓ * Ex/E
+# -------------------------------
+def trace_equipotential(
+    start_xy, Q, pos,
+    dL=0.05,                 # Δℓ (passo ao longo da equipotencial)
+    bounds=5.0,
+    min_dist_charge=0.05,
+    Emin=5e-5,
+    max_steps=8000,
+    close_tol=0.15,          # tolerância para "fechar" o laço
+    min_steps_before_close=50,
+    direction=+1
+):
+    xs, ys = start_xy
+    x, y = xs, ys
+    pts = [(x, y)]
+
+    for n in range(max_steps):
+        if abs(x) > bounds or abs(y) > bounds:
             break
 
-        x = x_new
-        y = y_new
-
-        # salva ponto a cada PLOT_EVERY iterações (só para não ficar pesado)
-        if step % PLOT_EVERY == 0:
-            xs.append(x)
-            ys.append(y)
-
-    return np.array(xs), np.array(ys)
-
-
-# -----------------------------
-# 5) Traçar equipotenciais (eqs. 15.7 e 15.8)
-# -----------------------------
-def trace_equipotential(x0, y0, close_radius=0.2):
-    """
-    Traça uma equipotencial a partir do ponto inicial (x0,y0).
-
-    Ideia do PDF: a equipotencial é sempre perpendicular a E.
-    (PDF) eqs. (15.7) e (15.8):
-      Δx = -Δℓ * Ey/|E|
-      Δy =  Δℓ * Ex/|E|
-
-    Condições de parada:
-    - sair da janela
-    - chegar perto de carga
-    - fechar laço (voltar perto do ponto inicial)
-    """
-    xs = [x0]
-    ys = [y0]
-
-    x_start = x0
-    y_start = y0
-
-    # Tenta uma direção; se falhar por sair da janela, tenta a direção oposta 1 vez
-    DIR = +1
-    tried_both = False
-
-    x = x0
-    y = y0
-
-    for step in range(MAX_STEPS):
-        Ex, Ey = electric_field(x, y)
-        E = np.sqrt(Ex*Ex + Ey*Ey)
-
-        if E <= 5e-4:
-            break
-
-        # (PDF) eqs. (15.7)-(15.8): deslocamento perpendicular a E
-        dx = -DL_V * (Ey / E)
-        dy =  DL_V * (Ex / E)
-
-        x_new = x + DIR * dx
-        y_new = y + DIR * dy
-
-        # se saiu da janela: tenta inverter direção uma vez
-        if not inside_box(x_new, y_new):
-            if not tried_both:
-                tried_both = True
-                DIR = -DIR
-                x = x_start
-                y = y_start
-                xs = [x_start]
-                ys = [y_start]
-                continue
-            else:
+        for (xk, yk) in pos:
+            if np.hypot(x - xk, y - yk) < min_dist_charge:
+                break
+        else:
+            Ex, Ey = electric_field(x, y, Q, pos)
+            E = np.hypot(Ex, Ey)
+            if E < Emin:
                 break
 
-        # se está perto de uma carga: para
-        if near_any_charge(x_new, y_new, NEAR_CHARGE_V):
-            break
+            # Eqs. (15.7) e (15.8): direção perpendicular a E
+            dx = direction * (-dL * (Ey / E))
+            dy = direction * ( dL * (Ex / E))
 
-        # checagem de fechamento do laço (voltar perto do início)
-        dist0 = np.sqrt((x_new - x_start)**2 + (y_new - y_start)**2)
-        if dist0 < close_radius and step > 50:
-            break
+            x += dx
+            y += dy
+            pts.append((x, y))
 
-        x = x_new
-        y = y_new
+            # Checagem de fechamento (como no exemplo do PDF)
+            if n > min_steps_before_close:
+                if np.hypot(x - xs, y - ys) < close_tol:
+                    break
 
-        if step % PLOT_EVERY == 0:
-            xs.append(x)
-            ys.append(y)
+            continue
 
-    return np.array(xs), np.array(ys)
+        # se caiu no "break" de proximidade de carga
+        break
+
+    return np.array(pts)
 
 
-# -----------------------------
-# 6) Pontos iniciais
-# -----------------------------
-def field_start_points(radius=0.10):
-    """
-    Pontos iniciais das linhas de campo:
-    - distribui NLE pontos num círculo pequeno ao redor de cada carga (como no exemplo do PDF/livro).
-      x0 = xk + r cos(theta)
-      y0 = yk + r sin(theta)
-    """
-    starts = []
-    for k in range(len(charges)):
+# -------------------------------
+# Função principal: plota linhas
+# -------------------------------
+def plot_field_and_equipotentials(
+    Q, pos,
+    bounds=5.0,
+    # parâmetros das linhas de campo PODEM SER ALTERADOS
+    NLE=12, r_start=0.15, dL_E=0.05,
+    # parâmetros das equipotenciais PODEM SER ALTERADOS
+    radii_V=(0.6, 1.0, 1.6, 2.2), angle_V=np.deg2rad(45), dL_V=0.05,
+):
+    pos = np.array(pos, dtype=float)
+    Q = np.array(Q, dtype=float)
+
+    fig, ax = plt.subplots(figsize=(7, 7))
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlim(-bounds, bounds)
+    ax.set_ylim(-bounds, bounds)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_title("Linhas de campo elétrico (contínuas) e equipotenciais (tracejadas)")
+
+    # Plota as cargas
+    for qk, (xk, yk) in zip(Q, pos):
+        if qk > 0:
+            ax.plot(xk, yk, "o", markersize=10)
+            ax.text(xk + 0.1, yk + 0.1, f"+{qk:g}")
+        else:
+            ax.plot(xk, yk, "s", markersize=8)
+            ax.text(xk + 0.1, yk + 0.1, f"{qk:g}")
+
+    # -------- Linhas de campo E --------
+    # Pontos de partida em um "pequeno círculo" em torno de cada carga (como sugerido no exemplo)
+    # x_s = x_Q + r cos(theta), y_s = y_Q + r sin(theta)
+    for (qk, (xk, yk)) in zip(Q, pos):
         for i in range(NLE):
             theta = 2*np.pi * i / NLE
-            x0 = pos[k, 0] + radius*np.cos(theta)
-            y0 = pos[k, 1] + radius*np.sin(theta)
-            starts.append((x0, y0, charges[k]))
-    return starts
+            xs = xk + r_start*np.cos(theta)
+            ys = yk + r_start*np.sin(theta)
 
+            # Para desenhar linhas que "vão do + para o -", fazemos:
+            # - se a carga de partida é positiva, seguimos +E
+            # - se a carga de partida é negativa, seguimos -E (isso ajuda a "emanar" da carga também)
+            direction = +1 if qk > 0 else -1
 
-def equip_start_points(angle_deg=45.0, r0=0.5):
-    """
-    Pontos iniciais das equipotenciais:
-    - escolhe um ângulo fixo e vai dobrando o raio (fator 2) para gerar várias curvas.
-    """
-    starts = []
-    ang = np.deg2rad(angle_deg)
+            line = trace_field_line(
+                (xs, ys), Q, pos,
+                dL=dL_E, bounds=bounds, direction=direction
+            )
+            if len(line) > 2:
+                ax.plot(line[:, 0], line[:, 1], linewidth=1.0)
 
-    for k in range(len(charges)):
-        factor = r0
-        for _ in range(NLV):
-            x0 = pos[k, 0] + factor*np.cos(ang)
-            y0 = pos[k, 1] + factor*np.sin(ang)
-            if inside_box(x0, y0):
-                starts.append((x0, y0))
-            factor *= 2.0
-    return starts
+    # -------- Equipotenciais --------
+    # Pontos de partida escolhidos a partir de cada carga, com raio variando (radii_V)
+    # e ângulo fixo (por ex. 45°), como discutido no texto do exemplo.
+    for (xk, yk) in pos:
+        for r in radii_V:
+            xs = xk + r*np.cos(angle_V)
+            ys = yk + r*np.sin(angle_V)
 
+            # Traça nos dois sentidos para aumentar chance de fechar a curva
+            for direction in (+1, -1):
+                eq = trace_equipotential(
+                    (xs, ys), Q, pos,
+                    dL=dL_V, bounds=bounds, direction=direction
+                )
+                if len(eq) > 10:
+                    ax.plot(eq[:, 0], eq[:, 1], linestyle="--", linewidth=1.0)
 
-# -----------------------------
-# 7) Programa principal: calcula e plota
-# -----------------------------
-def main():
-    plt.figure(figsize=(7, 7))
-    plt.title("Linhas de campo (azul) e equipotenciais (preto) — Exercício 15.1")
-    plt.xlim(XMIN, XMAX)
-    plt.ylim(YMIN, YMAX)
-    plt.gca().set_aspect("equal", adjustable="box")
-    plt.grid(True, alpha=0.25)
-
-    # Plota as cargas (visual)
-    for q, (xq, yq) in zip(charges, pos):
-        if q > 0:
-            plt.scatter([xq], [yq], marker="+", s=150)
-        else:
-            plt.scatter([xq], [yq], marker="_", s=200)
-
-    # (A) Linhas de campo (eqs. 15.5-15.6)
-    for (x0, y0, qsrc) in field_start_points(radius=0.10):
-        xs, ys = trace_field_line(x0, y0, qsrc)
-        if len(xs) > 2:
-            plt.plot(xs, ys, linewidth=1.2)
-
-    # (B) Equipotenciais (eqs. 15.7-15.8)
-    for (x0, y0) in equip_start_points(angle_deg=45.0, r0=0.5):
-        xs, ys = trace_equipotential(x0, y0, close_radius=0.2)
-        if len(xs) > 2:
-            plt.plot(xs, ys, "k-", linewidth=1.0)
-
+    ax.grid(True, alpha=0.3)
     plt.show()
 
 
-if __name__ == "__main__":
-    main()
+# ============================================================
+# EXEMPLO PRÁTICO (Exercício 15.1 do PDF):
+# Três cargas: -Q, +Q, -Q em (-1,0), (0,1), (1,0)
+# Com Q/(4*pi*epsilon) = 1
+# ============================================================
 
+if __name__ == "__main__":
+    Q = [-1, +1, -1]
+    pos = [(-1, 0), (0, 1), (1, 0)]
+    plot_field_and_equipotentials(Q, pos)
